@@ -193,6 +193,9 @@ ARG SCCACHE_ENDPOINT
 ARG SCCACHE_BUCKET_NAME=vllm-build-sccache
 ARG SCCACHE_REGION_NAME=us-west-2
 ARG SCCACHE_S3_NO_CREDENTIALS=0
+ARG AWS_ACCESS_KEY_ID
+ARG AWS_SECRET_ACCESS_KEY
+ARG SCCACHE_S3_USE_SSL
 
 # Flag to control whether to use pre-built vLLM wheels
 ARG VLLM_USE_PRECOMPILED=""
@@ -375,6 +378,14 @@ ARG FLASHINFER_GIT_REPO="https://github.com/flashinfer-ai/flashinfer.git"
 # Keep this in sync with https://github.com/vllm-project/vllm/blob/main/requirements/cuda.txt
 # We use `--force-reinstall --no-deps` to avoid issues with the existing FlashInfer wheel.
 ARG FLASHINFER_GIT_REF="v0.2.11"
+
+# max jobs used by Ninja to build extensions
+ARG max_jobs=2
+ENV MAX_JOBS=${max_jobs}
+# number of threads used by nvcc
+ARG nvcc_threads=8
+ENV NVCC_THREADS=$nvcc_threads
+
 RUN --mount=type=cache,target=/root/.cache/uv bash - <<'BASH'
   . /etc/environment
     git clone --depth 1 --recursive --shallow-submodules \
