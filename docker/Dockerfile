@@ -192,16 +192,17 @@ ARG SCCACHE_DOWNLOAD_URL=https://github.com/mozilla/sccache/releases/download/v0
 ARG SCCACHE_ENDPOINT
 ARG SCCACHE_BUCKET_NAME=vllm-build-sccache
 ARG SCCACHE_REGION_NAME=us-west-2
-ARG SCCACHE_S3_NO_CREDENTIALS=0
-ARG AWS_ACCESS_KEY_ID
-ARG AWS_SECRET_ACCESS_KEY
-ARG SCCACHE_S3_USE_SSL
 
 # Flag to control whether to use pre-built vLLM wheels
 ARG VLLM_USE_PRECOMPILED=""
 
 # if USE_SCCACHE is set, use sccache to speed up compilation
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=secret,id=sccache_s3_no_credentials,env=SCCACHE_S3_NO_CREDENTIALS \
+    --mount=type=secret,id=aws_access_key_id,env=AWS_ACCESS_KEY_ID \
+    --mount=type=secret,id=aws_secret_access_key,env=AWS_SECRET_ACCESS_KEY \
+    --mount=type=secret,id=sccache_s3_use_ssl,env=SCCACHE_S3_USE_SSL \
+    --mount=type=secret,id=sccache_endpoint,env=SCCACHE_ENDPOINT \
+    --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=.git,target=.git \
     if [ "$USE_SCCACHE" = "1" ]; then \
         echo "Installing sccache..." \
