@@ -35,7 +35,7 @@ if [ ! -e "/dev/gdrdrv" ] || [ "$FORCE" = true ]; then
     tar xzf v2.5.tar.gz; rm v2.5.tar.gz
     cd gdrcopy-2.5
     make prefix=$GDR_HOME CUDA=$CUDA_HOME all install
-    
+
     if $SUDO; then
         echo "Running insmod.sh with sudo"
         sudo ./insmod.sh
@@ -43,7 +43,7 @@ if [ ! -e "/dev/gdrdrv" ] || [ "$FORCE" = true ]; then
         echo "Skipping insmod.sh - sudo not available"
         echo "Please run 'sudo ./gdrcopy-2.5/insmod.sh' manually if needed"
     fi
-    
+
     cd ..
 else
     echo "Found /dev/gdrdrv. Skipping gdrcopy installation"
@@ -54,7 +54,7 @@ if ! command -v ucx_info &> /dev/null || [ "$FORCE" = true ]; then
     wget https://github.com/openucx/ucx/releases/download/v1.18.0/ucx-1.18.0.tar.gz
     tar xzf ucx-1.18.0.tar.gz; rm ucx-1.18.0.tar.gz
     cd ucx-1.18.0
-    
+
     # Checking Mellanox NICs
     MLX_OPTS=""
     if lspci | grep -i mellanox > /dev/null || command -v ibstat > /dev/null; then
@@ -63,7 +63,7 @@ if ! command -v ucx_info &> /dev/null || [ "$FORCE" = true ]; then
                   --with-mlx5-dv \
                   --with-ib-hw-tm"
     fi
-    
+
     ./configure  --prefix=$UCX_HOME                \
                 --enable-shared                    \
                 --disable-static                   \
@@ -79,7 +79,7 @@ if ! command -v ucx_info &> /dev/null || [ "$FORCE" = true ]; then
                 $MLX_OPTS
     make -j
     make -j install-strip
-    
+
     if $SUDO; then
         echo "Running ldconfig with sudo"
         sudo ldconfig
@@ -90,7 +90,7 @@ if ! command -v ucx_info &> /dev/null || [ "$FORCE" = true ]; then
 
     cd ..
 else
-    echo "Found existing UCX. Skipping UCX installation"  
+    echo "Found existing UCX. Skipping UCX installation"
 fi
 
 if ! command -v nixl_test &> /dev/null || [ "$FORCE" = true ]; then
@@ -105,5 +105,5 @@ if ! command -v nixl_test &> /dev/null || [ "$FORCE" = true ]; then
 
     cd ../..
 else
-    echo "Found existing NIXL. Skipping NIXL installation"  
+    echo "Found existing NIXL. Skipping NIXL installation"
 fi
