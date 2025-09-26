@@ -65,6 +65,8 @@ ARG UV_KEYRING_PROVIDER=${PIP_KEYRING_PROVIDER}
 
 # Flag enables built-in KV-connector dependency libs into docker images
 ARG INSTALL_KV_CONNECTORS=false
+ARG BUILD_PYTORCH_FROM_SOURCE=false
+ARG PYTORCH_VERSION=v2.8.0
 
 #################### BASE BUILD IMAGE ####################
 # prepare basic build environment
@@ -172,8 +174,13 @@ ENV UV_INDEX_STRATEGY="unsafe-best-match"
 ENV UV_LINK_MODE=copy
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system -r requirements/build.txt \
-    --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+    if [ "$BUILD_PYTORCH_FROM_SOURCE" = "true" ]; then \
+        echo "Installing build dependencies without torch..."; \
+        uv pip install --system -r requirements/build.txt --no-deps; \
+    else \
+        uv pip install --system -r requirements/build.txt \
+        --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.'); \
+    fi
 
 COPY . .
 ARG GIT_REPO_CHECK=0
@@ -273,11 +280,38 @@ COPY requirements/lint.txt requirements/lint.txt
 COPY requirements/test.txt requirements/test.txt
 COPY requirements/dev.txt requirements/dev.txt
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system -r requirements/dev.txt \
-    --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+    if [ "$BUILD_PYTORCH_FROM_SOURCE" = "true" ]; then \
+        echo "Installing dev dependencies without torch..."; \
+        uv pip install --system -r requirements/dev.txt --no-deps; \
+    else \
+        uv pip install --system -r requirements/dev.txt \
+        --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.'); \
+    fi
 #################### DEV IMAGE ####################
 
+#################### TORCH BUILD IMAGE ####################
+FROM base AS torch-build
+ARG TARGETPLATFORM
+
+ARG PIP_INDEX_URL UV_INDEX_URL
+ARG PIP_EXTRA_INDEX_URL UV_EXTRA_INDEX_URL
+ARG PYTORCH_CUDA_INDEX_BASE_URL
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "$BUILD_PYTORCH_FROM_SOURCE" = "true" ]; then \
+        echo "Building PyTorch from source..."; \
+        git clone --recursive --branch ${PYTORCH_VERSION} https://github.com/pytorch/pytorch && \
+        cd pytorch && \
+        python setup.py bdist_wheel --dist-dir=dist; \
+    else \
+        mkdir -p /workspace/pytorch/dist; \
+    fi
+#################### TORCH BUILD IMAGE ####################
+
 #################### vLLM installation IMAGE ####################
+# A dummy stage to use when torch is not built from source
+FROM scratch AS torch-build-dummy
+
 # image with vLLM installed
 FROM ${FINAL_BASE_IMAGE} AS vllm-base
 ARG CUDA_VERSION
@@ -365,10 +399,16 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     fi
 
 # Install vllm wheel first, so that torch etc will be installed.
-RUN --mount=type=bind,from=build,src=/workspace/dist,target=/vllm-workspace/dist \
-    --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system dist/*.whl --verbose \
-        --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+COPY --from=build /workspace/dist /vllm-workspace/dist
+COPY --from=torch-build /workspace/pytorch/dist /vllm-workspace/torch-dist
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ -f /vllm-workspace/torch-dist/*.whl ]; then \
+        echo "Installing PyTorch from source..."; \
+        uv pip install --system /vllm-workspace/torch-dist/*.whl; \
+    fi && \
+    uv pip install --system /vllm-workspace/dist/*.whl --verbose \
+        --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.');
 
 # If we need to build FlashInfer wheel before its release:
 # $ # Note we remove 7.0 from the arch list compared to the list below, since FlashInfer only supports sm75+
@@ -455,7 +495,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ARG DEEPGEMM_GIT_REF
 COPY tools/install_deepgemm.sh /tmp/install_deepgemm.sh
 RUN --mount=type=cache,target=/root/.cache/uv \
-    VLLM_DOCKER_BUILD_CONTEXT=1 /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" ${DEEPGEMM_GIT_REF:+--ref "$DEEPGEMM_GIT_REF"} 
+    VLLM_DOCKER_BUILD_CONTEXT=1 /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" ${DEEPGEMM_GIT_REF:+--ref "$DEEPGEMM_GIT_REF"}
 
 COPY tools/install_gdrcopy.sh install_gdrcopy.sh
 RUN set -eux; \
@@ -498,7 +538,12 @@ ENV UV_LINK_MODE=copy
 RUN --mount=type=cache,target=/root/.cache/uv \
     CUDA_MAJOR="${CUDA_VERSION%%.*}"; \
     if [ "$CUDA_MAJOR" -ge 12 ]; then \
-        uv pip install --system -r requirements/dev.txt; \
+        if [ "$BUILD_PYTORCH_FROM_SOURCE" = "true" ]; then \
+            echo "Installing dev dependencies without torch..."; \
+            uv pip install --system -r requirements/dev.txt --no-deps; \
+        else \
+            uv pip install --system -r requirements/dev.txt; \
+        fi; \
     fi
 
 # install development dependencies (for testing)
