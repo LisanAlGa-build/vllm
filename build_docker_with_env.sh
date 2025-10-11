@@ -14,6 +14,7 @@ fi
 docker build -f docker/Dockerfile \
     --build-arg CUDA_VERSION=12.4.0 \
     --build-arg PYTHON_VERSION=3.12 \
+    --build-arg torch_cuda_arch_list="8.0 9.0"\
     --build-arg FLASHINFER_AOT_COMPILE=true \
     --build-arg PYTORCH_CUDA_INDEX_BASE_URL=https://download.pytorch.org/whl/ \
     --build-arg nvcc_threads=1 --build-arg max_jobs=1 \

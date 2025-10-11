@@ -65,7 +65,7 @@ ARG UV_KEYRING_PROVIDER=${PIP_KEYRING_PROVIDER}
 
 # Flag enables built-in KV-connector dependency libs into docker images
 ARG INSTALL_KV_CONNECTORS=false
-ARG BUILD_PYTORCH_FROM_SOURCE=false
+ARG BUILD_PYTORCH_FROM_SOURCE=0
 ARG PYTORCH_VERSION=v2.8.0
 
 #################### BASE BUILD IMAGE ####################
@@ -85,7 +85,11 @@ ARG GET_PIP_URL
 RUN echo 'tzdata tzdata/Areas select America' | debconf-set-selections \
     && echo 'tzdata tzdata/Zones/America select Los_Angeles' | debconf-set-selections \
     && apt-get update -y \
-    && apt-get install -y ccache software-properties-common git curl sudo \
+    && apt-get install -y ccache software-properties-common git curl sudo wget \
+    && wget https://github.com/Kitware/CMake/releases/download/v4.1.1/cmake-4.1.1-linux-x86_64.sh \
+    && chmod +x cmake-4.1.1-linux-x86_64.sh \
+    && ./cmake-4.1.1-linux-x86_64.sh --skip-license --prefix=/usr/local \
+    && rm cmake-4.1.1-linux-x86_64.sh \
     && if [ ! -z ${DEADSNAKES_MIRROR_URL} ] ; then \
         if [ ! -z "${DEADSNAKES_GPGKEY_URL}" ] ; then \
             mkdir -p -m 0755 /etc/apt/keyrings ; \
@@ -174,7 +178,7 @@ ENV UV_INDEX_STRATEGY="unsafe-best-match"
 ENV UV_LINK_MODE=copy
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "$BUILD_PYTORCH_FROM_SOURCE" = "true" ]; then \
+    if [ "$BUILD_PYTORCH_FROM_SOURCE" = "1" ]; then \
         echo "Installing build dependencies without torch..."; \
         uv pip install --system -r requirements/build.txt --no-deps; \
     else \
@@ -244,6 +248,7 @@ RUN --mount=type=cache,target=/root/.cache/ccache \
         mkdir -p .deps && \
         export VLLM_USE_PRECOMPILED="${VLLM_USE_PRECOMPILED}" && \
         export VLLM_DOCKER_BUILD_CONTEXT=1 && \
+        python3 -m pip install -r requirements.txt && \
         python3 setup.py bdist_wheel --dist-dir=dist --py-limited-api=cp38; \
     fi
 
@@ -280,7 +285,7 @@ COPY requirements/lint.txt requirements/lint.txt
 COPY requirements/test.txt requirements/test.txt
 COPY requirements/dev.txt requirements/dev.txt
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "$BUILD_PYTORCH_FROM_SOURCE" = "true" ]; then \
+    if [ "$BUILD_PYTORCH_FROM_SOURCE" = "1" ]; then \
         echo "Installing dev dependencies without torch..."; \
         uv pip install --system -r requirements/dev.txt --no-deps; \
     else \
@@ -292,26 +297,28 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 #################### TORCH BUILD IMAGE ####################
 FROM base AS torch-build
 ARG TARGETPLATFORM
+ARG BUILD_PYTORCH_FROM_SOURCE
+ARG PYTORCH_VERSION
 
 ARG PIP_INDEX_URL UV_INDEX_URL
 ARG PIP_EXTRA_INDEX_URL UV_EXTRA_INDEX_URL
 ARG PYTORCH_CUDA_INDEX_BASE_URL
 
+ARG max_jobs=2
+ENV MAX_JOBS=${max_jobs}
+
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "$BUILD_PYTORCH_FROM_SOURCE" = "true" ]; then \
+    if [ "$BUILD_PYTORCH_FROM_SOURCE" = "1" ]; then \
         echo "Building PyTorch from source..."; \
         git clone --recursive --branch ${PYTORCH_VERSION} https://github.com/pytorch/pytorch && \
         cd pytorch && \
-        python setup.py bdist_wheel --dist-dir=dist; \
+        python3 setup.py bdist_wheel --dist-dir=dist; \
     else \
         mkdir -p /workspace/pytorch/dist; \
     fi
 #################### TORCH BUILD IMAGE ####################
 
 #################### vLLM installation IMAGE ####################
-# A dummy stage to use when torch is not built from source
-FROM scratch AS torch-build-dummy
-
 # image with vLLM installed
 FROM ${FINAL_BASE_IMAGE} AS vllm-base
 ARG CUDA_VERSION
@@ -403,7 +410,7 @@ COPY --from=build /workspace/dist /vllm-workspace/dist
 COPY --from=torch-build /workspace/pytorch/dist /vllm-workspace/torch-dist
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f /vllm-workspace/torch-dist/*.whl ]; then \
+    if [ -n "$(ls /vllm-workspace/torch-dist/*.whl 2>/dev/null)" ]; then \
         echo "Installing PyTorch from source..."; \
         uv pip install --system /vllm-workspace/torch-dist/*.whl; \
     fi && \
@@ -538,7 +545,7 @@ ENV UV_LINK_MODE=copy
 RUN --mount=type=cache,target=/root/.cache/uv \
     CUDA_MAJOR="${CUDA_VERSION%%.*}"; \
     if [ "$CUDA_MAJOR" -ge 12 ]; then \
-        if [ "$BUILD_PYTORCH_FROM_SOURCE" = "true" ]; then \
+        if [ "$BUILD_PYTORCH_FROM_SOURCE" = "1" ]; then \
             echo "Installing dev dependencies without torch..."; \
             uv pip install --system -r requirements/dev.txt --no-deps; \
         else \
