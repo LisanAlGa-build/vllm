@@ -71,7 +71,7 @@ ARG UV_KEYRING_PROVIDER=${PIP_KEYRING_PROVIDER}
 # Flag enables built-in KV-connector dependency libs into docker images
 ARG INSTALL_KV_CONNECTORS=false
 ARG BUILD_PYTORCH_FROM_SOURCE=0
-ARG PYTORCH_VERSION=v2.8.0
+ARG PYTORCH_VERSION=2.8.0
 
 #################### BASE BUILD IMAGE ####################
 # prepare basic build environment
@@ -170,9 +170,9 @@ ENV UV_LINK_MODE=copy
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ "$BUILD_PYTORCH_FROM_SOURCE" = "1" ]; then \
         echo "Installing build dependencies without torch..."; \
-        uv pip install -python /opt/venv/bin/python3 -r requirements/build.txt --no-deps; \
+        uv pip install --python /opt/venv/bin/python3 -r requirements/build.txt --no-deps; \
     else \
-        uv pip install -python /opt/venv/bin/python3 -r requirements/build.txt \
+        uv pip install --python /opt/venv/bin/python3 -r requirements/build.txt \
         --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.'); \
     fi
 
@@ -298,15 +298,56 @@ ARG max_jobs=2
 ENV MAX_JOBS=${max_jobs}
 
 RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=docker/.pre_compiled,target=/vllm-pre-compiled-wheels \
     if [ "$BUILD_PYTORCH_FROM_SOURCE" = "1" ]; then \
-        echo "Building PyTorch from source..."; \
-        git clone --recursive --branch ${PYTORCH_VERSION} https://github.com/pytorch/pytorch && \
-        cd pytorch && \
-        python3 setup.py bdist_wheel --dist-dir=dist; \
+        echo "Checking for pre-compiled PyTorch wheel..."; \
+        PRECOMPILED_WHEEL=$(find /vllm-pre-compiled-wheels -name "torch-${PYTORCH_VERSION}*.whl" -print -quit); \
+        if [ -n "$PRECOMPILED_WHEEL" ]; then \
+            echo "Found pre-compiled PyTorch wheel: $PRECOMPILED_WHEEL. Copying to /workspace/pytorch/dist..."; \
+            mkdir -p /workspace/pytorch/dist && cp "$PRECOMPILED_WHEEL" /workspace/pytorch/dist/; \
+        else \
+            echo "No pre-compiled PyTorch wheel found. Building PyTorch from source..."; \
+            git clone --recursive --branch v${PYTORCH_VERSION} https://github.com/pytorch/pytorch && \
+            cd pytorch && \
+            python3 setup.py bdist_wheel --dist-dir=dist; \
+        fi; \
     else \
         mkdir -p /workspace/pytorch/dist; \
     fi
 #################### TORCH BUILD IMAGE ####################
+
+#################### FlashInfer BUILD IMAGE ####################
+FROM base AS flashinfer-build
+ARG BUILD_FLASHINFER_FROM_SOURCE=0
+ARG max_jobs=2
+ARG torch_cuda_arch_list='7.0 7.5 8.0 8.9 9.0 10.0 12.0'
+
+ENV FLASHINFER_ENABLE_AOT=1
+ENV FLASHINFER_CUDA_ARCH_LIST=${torch_cuda_arch_list}
+ENV MAX_JOBS=${max_jobs}
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "$BUILD_FLASHINFER_FROM_SOURCE" = "1" ]; then \
+        echo "Building FlashInfer from source..."; \
+        echo "MAX_JOBS is : ${MAX_JOBS}"; \
+        echo "ARCH_LIST: ${FLASHINFER_CUDA_ARCH_LIST}"; \
+        # install package for build flashinfer
+        # see issue: https://github.com/flashinfer-ai/flashinfer/issues/738
+        git clone --recursive https://github.com/flashinfer-ai/flashinfer.git \
+        && cd flashinfer \
+        && git checkout v0.4.0 \
+        && git submodule update --init --recursive \
+        && echo "finish git clone flashinfer..." \
+        && rm -rf build \
+        && uv build --wheel --out-dir ./dist \
+        && cd ./flashinfer-jit-cache \
+        && uv build --wheel --out-dir ../dist \
+        && cd ../flashinfer-cubin\
+        && uv build --wheel --out-dir ../dist; \
+    else \
+        mkdir -p /workspace/flashinfer/dist; \
+    fi
+
+#################### FlashInfer BUILD IMAGE ####################
 
 #################### vLLM installation IMAGE ####################
 # image with vLLM installed
@@ -398,11 +439,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Install vllm wheel first, so that torch etc will be installed.
 COPY --from=build /workspace/dist /vllm-workspace/dist
 COPY --from=torch-build /workspace/pytorch/dist /vllm-workspace/torch-dist
+COPY --from=flashinfer-build /workspace/flashinfer/dist /vllm-workspace/flashinfer-dist
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ -n "$(ls /vllm-workspace/torch-dist/*.whl 2>/dev/null)" ]; then \
         echo "Installing PyTorch from source..."; \
-        uv pip install --system /vllm-workspace/torch-dist/*.whl; \
+        uv pip install --system --prerelease=allow /vllm-workspace/torch-dist/*.whl; \
     fi && \
     uv pip install --system /vllm-workspace/dist/*.whl --verbose \
         --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.');
@@ -410,10 +452,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Install FlashInfer pre-compiled kernel cache and binaries
 # https://docs.flashinfer.ai/installation.html
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system flashinfer-cubin==0.4.0 \
-    && uv pip install --system flashinfer-jit-cache==0.4.0 \
-        --extra-index-url https://flashinfer.ai/whl/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.') \
-    && flashinfer show-config
+    if [ -n "$(ls /vllm-workspace/flashinfer-dist/*.whl 2>/dev/null)" ]; then \
+            echo "Installing FlashInfer from source..."; \
+         uv pip install --system /vllm-workspace/flashinfer-dist/*.whl; \
+    else; \
+        uv pip install --system flashinfer-cubin==0.4.0 \
+        && uv pip install --system flashinfer-jit-cache==0.4.0 \
+            --extra-index-url https://flashinfer.ai/whl/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.') \
+        && flashinfer show-config; \
+    fi
 
 COPY examples examples
 COPY benchmarks benchmarks
