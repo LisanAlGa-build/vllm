@@ -3,7 +3,7 @@
 
 import warnings
 from collections.abc import Mapping
-from typing import Literal, Optional
+from typing import Literal
 
 import pytest
 from mistral_common.tokens.tokenizers.base import SpecialTokenPolicy
@@ -152,9 +152,9 @@ def audio_url():
 
 
 def _assert_mm_data_is_image_input(
-    mm_data: Optional[MultiModalDataDict],
+    mm_data: MultiModalDataDict | None,
     image_count: int,
-    skipped_image_indices: Optional[list] = None,
+    skipped_image_indices: list | None = None,
 ) -> None:
     assert mm_data is not None
     assert set(mm_data.keys()) == {"image"}
@@ -169,9 +169,9 @@ def _assert_mm_data_is_image_input(
 
 
 def _assert_mm_uuids(
-    mm_uuids: Optional[MultiModalUUIDDict],
+    mm_uuids: MultiModalUUIDDict | None,
     media_count: int,
-    expected_uuids: list[Optional[str]],
+    expected_uuids: list[str | None],
     modality: str = "image",
 ) -> None:
     if len(expected_uuids) > 0:
@@ -193,9 +193,9 @@ MultiModalDataCounts = Mapping[ModalityType, int]
 
 
 def _assert_mm_data_inputs(
-    mm_data: Optional[MultiModalDataDict],
+    mm_data: MultiModalDataDict | None,
     data_count: MultiModalDataCounts,
-    skipped_media_indices: Optional[dict[str, list]] = None,  # modality -> list[int]
+    skipped_media_indices: dict[str, list] | None = None,  # modality -> list[int]
 ) -> None:
     assert mm_data is not None
     assert set(data_count.keys()) == (set(mm_data.keys()))
@@ -1810,6 +1810,7 @@ def test_resolve_hf_chat_template_kwargs(sample_json_schema, model, expected_kwa
         "unsed_kwargs_2": "abc",
         # should not appear
         "chat_template": "{% Hello world! %}",
+        "tokenize": True,
         # used by tokenizer
         "continue_final_message": True,
         "tools": tools,
@@ -1846,10 +1847,21 @@ def test_resolve_hf_chat_template_kwargs(sample_json_schema, model, expected_kwa
         tools=tools,
         model_config=model_config,
     )
+    with pytest.raises(
+        ValueError, match="Found unexpected chat template kwargs from request"
+    ):
+        # should raise error if `chat_template_kwargs` contains
+        # `chat_template` or `tokenize`
+        resolve_chat_template_kwargs(
+            tokenizer,
+            chat_template=chat_template,
+            chat_template_kwargs=chat_template_kwargs,
+        )
     resolved_chat_template_kwargs = resolve_chat_template_kwargs(
         tokenizer,
         chat_template=chat_template,
         chat_template_kwargs=chat_template_kwargs,
+        raise_on_unexpected=False,
     )
     assert set(resolved_chat_template_kwargs.keys()) == expected_kwargs
 
